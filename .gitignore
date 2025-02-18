@@ -1,0 +1,11 @@
+
+# System Files
+config/
+certs/
+device_info/
+
+# Python Files
+*.pyc
+__pycache__/
+.vscode/
+venv/
