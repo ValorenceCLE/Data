@@ -1,3 +1,8 @@
+
+#! The sensor reading portion of this scriprt has been replaced by the smbus.py file
+
+
+
 import asyncio
 from typing import Dict
 import board
