@@ -17,6 +17,10 @@ from services.smbus import INA260Sensor, SHT30Sensor
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("DataCollectionManager")
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 # If the config file is in the same directory as main.py
 import os
 config_path = os.path.join(os.path.dirname(__file__), "config.json")

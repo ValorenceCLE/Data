@@ -15,10 +15,10 @@ from app.core.tasks import TaskManager
 
 
 logger = logging.getLogger(__name__)
-# Set up logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[logging.StreamHandler()])
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 # Try to import Redis - it's optional
 try:
     from redis.asyncio import Redis
