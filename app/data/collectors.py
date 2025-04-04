@@ -66,7 +66,6 @@ class DataCollectionManager:
                     redis_url = "redis://localhost:6379/0"  # Default Redis URL
                     self.redis = Redis.from_url(redis_url)
                     await self.redis.ping()
-                    logger.info("Redis connection established")
                 except Exception as e:
                     logger.error(f"Failed to connect to Redis: {e}")
                     self.redis = None
@@ -107,7 +106,6 @@ class DataCollectionManager:
                 # Create sensor
                 sensor = INA260Sensor(address=address)
                 self.ina260_sensors[relay_id] = sensor
-                logger.info(f"Initialized INA260 sensor for {relay_id} at address 0x{address:02X}")
             except Exception as e:
                 logger.error(f"Failed to initialize INA260 sensor: {e}")
         
@@ -115,7 +113,6 @@ class DataCollectionManager:
         try:
             self.sht30_sensor = SHT30Sensor(address=0x45)
             await self.sht30_sensor.reset()
-            logger.info("Initialized SHT30 environmental sensor")
         except Exception as e:
             logger.error(f"Failed to initialize SHT30 sensor: {e}")
             self.sht30_sensor = None
@@ -150,13 +147,11 @@ class DataCollectionManager:
                     "timestamp": timestamp,
                     "relay": relay_id
                 }
-                print(f"Collected data for {relay_id}: {data}")  # Debug print
                 
                 # Stream to Redis if available
                 if self.redis:
                     try:
                         await self.redis.xadd(relay_id, data)
-                        logger.info(f"Streamed data for {relay_id} to Redis")
                     except Exception as e:
                         logger.error(f"Failed to stream data to Redis: {e}")
                 
@@ -171,7 +166,6 @@ class DataCollectionManager:
                     await self.task_manager.evaluate_data(relay_id, eval_data)
                 
                 # Log periodically
-                logger.info(f"Sensor readings for {relay_id}: {voltage:.2f}V, {current:.3f}A, {power:.2f}W")
                 
             except Exception as e:
                 logger.error(f"Error collecting data for {relay_id}: {e}")
@@ -211,7 +205,6 @@ class DataCollectionManager:
                 if self.redis:
                     try:
                         await self.redis.xadd("environmental", data)
-                        logger.info("Streamed environmental data to Redis")
                     except Exception as e:
                         logger.error(f"Failed to stream environmental data to Redis: {e}")
                 
@@ -253,13 +246,11 @@ class DataCollectionManager:
         for relay_id, sensor in self.ina260_sensors.items():
             task = asyncio.create_task(self._collect_relay_data(relay_id, sensor))
             self.collection_tasks.append(task)
-            logger.info(f"Started data collection for {relay_id}")
         
         # Start environmental data collection if sensor is available
         if self.sht30_sensor:
             task = asyncio.create_task(self._collect_environmental_data())
             self.collection_tasks.append(task)
-            logger.info("Started environmental data collection")
         
         # Wait for all tasks to complete (they should run indefinitely)
         await asyncio.gather(*self.collection_tasks, return_exceptions=True)
@@ -293,5 +284,3 @@ class DataCollectionManager:
         if self.redis:
             await self.redis.close()
             self.redis = None
-        
-        print("Data collection shut down")
