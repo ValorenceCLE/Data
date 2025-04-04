@@ -9,16 +9,18 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set
 import logging
-from app.utils.validator import Config, RelayConfig
+from app.utils.validator import Config
 from services.smbus import INA260Sensor, SHT30Sensor
 from app.core.tasks import TaskManager
-
+from app.data.network_collectors import NetworkDataCollector
+from app.data.influx_uploader import InfluxUploader
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
 # Try to import Redis - it's optional
 try:
     from redis.asyncio import Redis
@@ -43,11 +45,17 @@ class DataCollectionManager:
         self.task_manager = task_manager
         self.redis = None
         self._running = False
-        self._collection_interval = 3  # Collect data every 5 seconds
+        self._collection_interval = 3  # Collect data every 3 seconds
         
         # Track what sensors are available
         self.ina260_sensors: Dict[str, INA260Sensor] = {}
         self.sht30_sensor: Optional[SHT30Sensor] = None
+        
+        # Network data collector
+        self.network_collector = NetworkDataCollector()
+        
+        # InfluxDB Uploader
+        self.influx_uploader = InfluxUploader()
         
         # Track collection tasks
         self.collection_tasks = []
@@ -63,9 +71,11 @@ class DataCollectionManager:
             # Initialize Redis if available
             if REDIS_AVAILABLE:
                 try:
-                    redis_url = "redis://localhost:6379/0"  # Default Redis URL
+                    import os
+                    redis_url = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
                     self.redis = Redis.from_url(redis_url)
                     await self.redis.ping()
+                    logger.info(f"Redis connection established to {redis_url}")
                 except Exception as e:
                     logger.error(f"Failed to connect to Redis: {e}")
                     self.redis = None
@@ -82,7 +92,6 @@ class DataCollectionManager:
         """
         Initialize all available sensors.
         """
-        # Initialize INA260 sensors for relays
         # Configuration for INA260 sensors
         INA260_SENSORS = [
             {"id": "relay_1", "sensor": "ina260_1", "address": "0x44"},
@@ -106,13 +115,15 @@ class DataCollectionManager:
                 # Create sensor
                 sensor = INA260Sensor(address=address)
                 self.ina260_sensors[relay_id] = sensor
+                logger.info(f"Initialized INA260 sensor for {relay_id}")
             except Exception as e:
-                logger.error(f"Failed to initialize INA260 sensor: {e}")
+                logger.error(f"Failed to initialize INA260 sensor for {sensor_config['id']}: {e}")
         
         # Initialize SHT30 sensor (if available)
         try:
             self.sht30_sensor = SHT30Sensor(address=0x45)
             await self.sht30_sensor.reset()
+            logger.info("Initialized SHT30 environmental sensor")
         except Exception as e:
             logger.error(f"Failed to initialize SHT30 sensor: {e}")
             self.sht30_sensor = None
@@ -138,26 +149,32 @@ class DataCollectionManager:
                     await asyncio.sleep(self._collection_interval)
                     continue
                 
-                # Create data point
-                timestamp = datetime.now(timezone.utc).astimezone().isoformat()
-                data = {
-                    "volts": voltage,
-                    "amps": current,
-                    "watts": power,
-                    "timestamp": timestamp,
-                    "relay": relay_id
-                }
-                
                 # Stream to Redis if available
                 if self.redis:
                     try:
+                        data = {
+                            "volts": voltage,
+                            "amps": current,
+                            "watts": power,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
                         await self.redis.xadd(relay_id, data)
                     except Exception as e:
                         logger.error(f"Failed to stream data to Redis: {e}")
                 
+                # Upload to InfluxDB
+                await self.influx_uploader.upload_sensor_data(
+                    measurement="relay_power",
+                    tags={"relay_id": relay_id},
+                    fields={
+                        "voltage": voltage,
+                        "current": current,
+                        "power": power
+                    }
+                )
+                
                 # Send to task manager for evaluation
                 if self.task_manager:
-                    # Create a copy with only numeric data for task evaluation
                     eval_data = {
                         "volts": voltage,
                         "amps": current,
@@ -166,6 +183,7 @@ class DataCollectionManager:
                     await self.task_manager.evaluate_data(relay_id, eval_data)
                 
                 # Log periodically
+                logger.debug(f"Relay {relay_id} readings: {voltage:.2f}V, {current:.3f}A, {power:.2f}W")
                 
             except Exception as e:
                 logger.error(f"Error collecting data for {relay_id}: {e}")
@@ -193,24 +211,30 @@ class DataCollectionManager:
                     await asyncio.sleep(self._collection_interval)
                     continue
                 
-                # Create data point
-                timestamp = datetime.now(timezone.utc).astimezone().isoformat()
-                data = {
-                    "temperature": temperature,
-                    "humidity": humidity,
-                    "timestamp": timestamp
-                }
-                
                 # Stream to Redis if available
                 if self.redis:
                     try:
+                        data = {
+                            "temperature": temperature,
+                            "humidity": humidity,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
                         await self.redis.xadd("environmental", data)
                     except Exception as e:
                         logger.error(f"Failed to stream environmental data to Redis: {e}")
                 
+                # Upload to InfluxDB
+                await self.influx_uploader.upload_sensor_data(
+                    measurement="environmental",
+                    tags={},
+                    fields={
+                        "temperature": temperature,
+                        "humidity": humidity
+                    }
+                )
+                
                 # Send to task manager for evaluation
                 if self.task_manager:
-                    # Create a copy with only numeric data for task evaluation
                     eval_data = {
                         "temperature": temperature,
                         "humidity": humidity
@@ -218,13 +242,51 @@ class DataCollectionManager:
                     await self.task_manager.evaluate_data("environmental", eval_data)
                 
                 # Log periodically
-                logger.info(f"Environmental readings: {temperature:.1f}°F, {humidity:.1f}%")
+                logger.debug(f"Environmental readings: {temperature:.1f}°F, {humidity:.1f}%")
                 
             except Exception as e:
                 logger.error(f"Error collecting environmental data: {e}")
             
             # Wait until next collection
             await asyncio.sleep(self._collection_interval * 2)  # Collect less frequently
+    
+    async def _collect_network_data(self):
+        """
+        Collect network performance metrics.
+        """
+        while self._running:
+            try:
+                # Collect network metrics via the network collector
+                await self.network_collector._network_data_collection_cycle()
+                
+                # Get current metrics
+                metrics = self.network_collector.get_network_metrics()
+                
+                # Skip if no valid metrics
+                if not any(metrics.values()):
+                    logger.warning("No valid network metrics")
+                    await asyncio.sleep(60)
+                    continue
+                
+                # Upload to InfluxDB
+                await self.influx_uploader.upload_sensor_data(
+                    measurement="network_performance",
+                    tags={},
+                    fields={
+                        k: v for k, v in metrics.items() 
+                        if v is not None
+                    }
+                )
+                
+                # Log metrics
+                logger.debug(f"Network metrics: {metrics}")
+                
+                # Wait until next collection
+                await asyncio.sleep(60)
+            
+            except Exception as e:
+                logger.error(f"Error collecting network data: {e}")
+                await asyncio.sleep(60)
     
     async def run(self):
         """
@@ -242,6 +304,10 @@ class DataCollectionManager:
         
         logger.info("Starting data collection")
         
+        # Start InfluxDB uploader background task
+        influx_task = asyncio.create_task(self.influx_uploader.run())
+        self.collection_tasks.append(influx_task)
+        
         # Start a collection task for each sensor
         for relay_id, sensor in self.ina260_sensors.items():
             task = asyncio.create_task(self._collect_relay_data(relay_id, sensor))
@@ -251,6 +317,10 @@ class DataCollectionManager:
         if self.sht30_sensor:
             task = asyncio.create_task(self._collect_environmental_data())
             self.collection_tasks.append(task)
+        
+        # Start network data collection
+        network_task = asyncio.create_task(self._collect_network_data())
+        self.collection_tasks.append(network_task)
         
         # Wait for all tasks to complete (they should run indefinitely)
         await asyncio.gather(*self.collection_tasks, return_exceptions=True)
@@ -284,3 +354,6 @@ class DataCollectionManager:
         if self.redis:
             await self.redis.close()
             self.redis = None
+        
+        # Shutdown InfluxDB uploader
+        await self.influx_uploader.shutdown()

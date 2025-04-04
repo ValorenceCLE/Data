@@ -223,7 +223,7 @@
           "actions": [
               {
                   "type": "io",
-                  "target": "relay_1",
+                  "target": "relay_3",
                   "state": "on"
               }
           ]
