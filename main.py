@@ -8,10 +8,19 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set
-from app.utils.logging_setup import local_logger as logger
-from app.utils.validator import Config
+import logging
+from app.utils.validator import Config, load_config
 from app.core.tasks import TaskManager
 from services.smbus import INA260Sensor, SHT30Sensor
+
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("DataCollectionManager")
+# If the config file is in the same directory as main.py
+import os
+config_path = os.path.join(os.path.dirname(__file__), "config.json")
+config = load_config(config_path)
 
 class DataCollectionManager:
     """
@@ -230,3 +239,27 @@ class DataCollectionManager:
             )
         
         logger.info("Data collection shut down")
+
+
+if __name__ == "__main__":
+    from app.utils.validator import load_config
+    import os
+    import asyncio
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    config = load_config(config_path)
+    
+    
+    async def main():
+        # Load configuration
+        
+        # Initialize data collection manager
+        data_manager = DataCollectionManager(config)
+        
+        # Start data collection
+        try:
+            await data_manager.run()
+        except KeyboardInterrupt:
+            await data_manager.shutdown()
+    
+    # Run the main function
+    asyncio.run(main())

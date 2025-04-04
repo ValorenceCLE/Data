@@ -7,11 +7,14 @@ and provides utility functions for working with the configuration.
 import json
 import os
 from typing import Dict, List, Optional, Union, Any
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, model_validator, Field
 from datetime import datetime
 import ipaddress
-from app.utils.logging_setup import local_logger as logger
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("ConfigValidator")
 class NetworkConfig(BaseModel):
     """
     Network configuration model.
@@ -116,8 +119,15 @@ class RelayConfig(BaseModel):
     name: str
     enabled: bool = True
     pulse_time: int = 5  # Default 5 seconds
-    schedule: RelaySchedule
+    schedule: Union[RelaySchedule, bool] = Field(default_factory=lambda: RelaySchedule())  # Allow bool or RelaySchedule
     dashboard: DashboardConfig
+
+    @field_validator('schedule')
+    def validate_schedule(cls, v):
+        # If schedule is set to False, return a default disabled schedule
+        if v is False:
+            return RelaySchedule(enabled=False)
+        return v
 
     @field_validator('pulse_time')
     def validate_pulse_time(cls, v):

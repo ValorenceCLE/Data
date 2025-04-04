@@ -6,9 +6,12 @@ interactions through the RelayControl class from services.controller.
 """
 import asyncio
 from typing import Dict, List, Optional, Any
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import RelayConfig
 from services.controller import RelayControl
+
+logger = logging.getLogger("RelayManager")
+logger.setLevel(logging.DEBUG)
 
 class RelayManager:
     """

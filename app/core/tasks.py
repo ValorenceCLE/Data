@@ -7,9 +7,12 @@ import asyncio
 import os
 import subprocess
 from typing import Dict, List, Any, Optional
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import Task, TaskAction
 from app.system.relay import RelayManager
+
+logger = logging.getLogger("TaskManager")
+logger.setLevel(logging.DEBUG)
 
 class TaskManager:
     """

@@ -7,8 +7,12 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import RelayConfig, RelaySchedule
+
+
+logger = logging.getLogger("ScheduleManager")
+logger.setLevel(logging.DEBUG)
 
 class ScheduleManager:
     """

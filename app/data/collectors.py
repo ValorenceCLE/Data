@@ -8,11 +8,17 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import Config, RelayConfig
 from services.smbus import INA260Sensor, SHT30Sensor
 from app.core.tasks import TaskManager
 
+
+logger = logging.getLogger(__name__)
+# Set up logging
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
 # Try to import Redis - it's optional
 try:
     from redis.asyncio import Redis
@@ -37,7 +43,7 @@ class DataCollectionManager:
         self.task_manager = task_manager
         self.redis = None
         self._running = False
-        self._collection_interval = 5  # Collect data every 5 seconds
+        self._collection_interval = 3  # Collect data every 5 seconds
         
         # Track what sensors are available
         self.ina260_sensors: Dict[str, INA260Sensor] = {}
@@ -101,7 +107,7 @@ class DataCollectionManager:
                 # Create sensor
                 sensor = INA260Sensor(address=address)
                 self.ina260_sensors[relay_id] = sensor
-                logger.debug(f"Initialized INA260 sensor for {relay_id} at address 0x{address:02X}")
+                logger.info(f"Initialized INA260 sensor for {relay_id} at address 0x{address:02X}")
             except Exception as e:
                 logger.error(f"Failed to initialize INA260 sensor: {e}")
         
@@ -109,7 +115,7 @@ class DataCollectionManager:
         try:
             self.sht30_sensor = SHT30Sensor(address=0x45)
             await self.sht30_sensor.reset()
-            logger.debug("Initialized SHT30 environmental sensor")
+            logger.info("Initialized SHT30 environmental sensor")
         except Exception as e:
             logger.error(f"Failed to initialize SHT30 sensor: {e}")
             self.sht30_sensor = None
@@ -144,12 +150,13 @@ class DataCollectionManager:
                     "timestamp": timestamp,
                     "relay": relay_id
                 }
+                print(f"Collected data for {relay_id}: {data}")  # Debug print
                 
                 # Stream to Redis if available
                 if self.redis:
                     try:
                         await self.redis.xadd(relay_id, data)
-                        logger.debug(f"Streamed data for {relay_id} to Redis")
+                        logger.info(f"Streamed data for {relay_id} to Redis")
                     except Exception as e:
                         logger.error(f"Failed to stream data to Redis: {e}")
                 
@@ -164,7 +171,7 @@ class DataCollectionManager:
                     await self.task_manager.evaluate_data(relay_id, eval_data)
                 
                 # Log periodically
-                logger.debug(f"Sensor readings for {relay_id}: {voltage:.2f}V, {current:.3f}A, {power:.2f}W")
+                logger.info(f"Sensor readings for {relay_id}: {voltage:.2f}V, {current:.3f}A, {power:.2f}W")
                 
             except Exception as e:
                 logger.error(f"Error collecting data for {relay_id}: {e}")
@@ -204,7 +211,7 @@ class DataCollectionManager:
                 if self.redis:
                     try:
                         await self.redis.xadd("environmental", data)
-                        logger.debug("Streamed environmental data to Redis")
+                        logger.info("Streamed environmental data to Redis")
                     except Exception as e:
                         logger.error(f"Failed to stream environmental data to Redis: {e}")
                 
@@ -218,7 +225,7 @@ class DataCollectionManager:
                     await self.task_manager.evaluate_data("environmental", eval_data)
                 
                 # Log periodically
-                logger.debug(f"Environmental readings: {temperature:.1f}°F, {humidity:.1f}%")
+                logger.info(f"Environmental readings: {temperature:.1f}°F, {humidity:.1f}%")
                 
             except Exception as e:
                 logger.error(f"Error collecting environmental data: {e}")
@@ -246,13 +253,13 @@ class DataCollectionManager:
         for relay_id, sensor in self.ina260_sensors.items():
             task = asyncio.create_task(self._collect_relay_data(relay_id, sensor))
             self.collection_tasks.append(task)
-            logger.debug(f"Started data collection for {relay_id}")
+            logger.info(f"Started data collection for {relay_id}")
         
         # Start environmental data collection if sensor is available
         if self.sht30_sensor:
             task = asyncio.create_task(self._collect_environmental_data())
             self.collection_tasks.append(task)
-            logger.debug("Started environmental data collection")
+            logger.info("Started environmental data collection")
         
         # Wait for all tasks to complete (they should run indefinitely)
         await asyncio.gather(*self.collection_tasks, return_exceptions=True)
@@ -287,4 +294,4 @@ class DataCollectionManager:
             await self.redis.close()
             self.redis = None
         
-        logger.info("Data collection shut down")
+        print("Data collection shut down")

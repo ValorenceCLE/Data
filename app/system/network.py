@@ -12,8 +12,11 @@ import os
 import tempfile
 from typing import Optional, List, Dict
 import ipaddress
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import NetworkConfig
+
+logger = logging.getLogger("NetworkManager")
+logger.setLevel(logging.DEBUG)
 
 class NetworkManager:
     """

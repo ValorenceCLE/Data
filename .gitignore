@@ -9,3 +9,4 @@ device_info/
 __pycache__/
 .vscode/
 venv/
+.log

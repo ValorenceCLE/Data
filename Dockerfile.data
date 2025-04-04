@@ -1,56 +1,56 @@
-# Stage 1: Base Image for Dependencies
-FROM python:3.11-bookworm AS base
+# Use Python 3.11 on Debian Bookworm as the base image
+FROM python:3.11-slim-bookworm
 
-# Install build tools and Rust (minimal profile for smaller installation)
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ make curl && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.83.0 --profile minimal && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    gcc \
+    g++ \
+    make \
+    sudo \
+    iproute2 \
+    network-manager \
+    dnsutils \
+    inetutils-ping \
+    python3-smbus \
+    python3-dev \
+    python3-setuptools \
+    python3-wheel \
+    python3-pip \
+    libgpiod2 \
+    python3-libgpiod \
+    python3-systemd \
+    i2c-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set Rust environment
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Set up a virtual environment for Python
-RUN python -m venv /venv
-ENV PATH="/venv/bin:$PATH"
-
-# Set up the working directory for dependencies
-WORKDIR /deps
+# Copy requirements file
 COPY requirements.txt .
 
-# Install Python dependencies in the virtual environment
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Clean up build tools to reduce image size
-RUN apt-get remove -y gcc g++ make && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+# Copy application code
+COPY app/ /app/app/
+COPY services/ /app/services/
+COPY main.py /app/
+COPY config.json /app/
 
-# Stage 2: Web Application
-FROM python:3.11-slim-bookworm AS webapp
+# Make sure the main script is executable
+RUN chmod +x /app/main.py
 
-# Copy virtual environment from the base stage
-COPY --from=base /venv /venv
-ENV PATH="/venv/bin:$PATH"
+# Create directory for logs
+RUN mkdir -p /var/log/dpm
+RUN chmod -R 777 /var/log/dpm
 
-# Set up the web app code
-WORKDIR /app
-COPY ./web /app
+# Create directory for certificates
+RUN mkdir -p /etc/dpm/certs
+RUN chmod -R 777 /etc/dpm/certs
 
-# Expose the port for FastAPI
-EXPOSE 8000
+# Expose any needed ports (if your app serves HTTP or other services)
+# EXPOSE 8000
 
-# Run the FastAPI server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--reload"]
-
-# Stage 3: Data Collection
-FROM python:3.11-slim-bookworm AS data_collection
-
-# Copy virtual environment from the base stage
-COPY --from=base /venv /venv
-ENV PATH="/venv/bin:$PATH"
-
-# Set up the data collection code
-WORKDIR /app
-COPY ./data /app
-
-# Run the data collection container
+# Set the entrypoint to the main Python script
 CMD ["python3", "main.py"]

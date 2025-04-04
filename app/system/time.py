@@ -12,8 +12,11 @@ import os
 import tempfile
 from typing import Optional, List, Dict
 from datetime import datetime, timezone
-from app.utils.logging_setup import local_logger as logger
+import logging
 from app.utils.validator import DateTimeConfig
+
+logger = logging.getLogger("TimeManager")
+logger.setLevel(logging.DEBUG)
 
 class TimeManager:
     """
