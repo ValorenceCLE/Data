@@ -45,7 +45,7 @@ class DataCollectionManager:
         self.task_manager = task_manager
         self.redis = None
         self._running = False
-        self._collection_interval = 3  # Collect data every 3 seconds
+        self._collection_interval = 5  # Collect data every 3 seconds
         
         # Track what sensors are available
         self.ina260_sensors: Dict[str, INA260Sensor] = {}

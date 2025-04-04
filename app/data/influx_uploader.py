@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from influxdb_client import Point
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
 from influxdb_client.client.write_api_async import WriteApiAsync
-
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ class InfluxUploader:
     def __init__(
         self, 
         batch_size: int = 100,
-        flush_interval: int = 5
+        flush_interval: int = 10
     ):
         """
         Initialize the InfluxDB uploader.
@@ -43,6 +42,31 @@ class InfluxUploader:
         
         # State management
         self._running = False
+        
+        # Configuration validation
+        self._validate_config()
+    
+    def _validate_config(self):
+        """
+        Validate InfluxDB configuration before initialization.
+        """
+        config_issues = []
+        
+        if not settings.INFLUXDB_URL:
+            config_issues.append("InfluxDB URL is not set")
+        
+        if not settings.TOKEN:
+            config_issues.append("InfluxDB token is not set")
+        
+        if not settings.ORG:
+            config_issues.append("InfluxDB organization is not set")
+        
+        if not settings.BUCKET:
+            config_issues.append("InfluxDB bucket is not set")
+        
+        if config_issues:
+            logger.error("InfluxDB configuration issues: %s", ", ".join(config_issues))
+            raise ValueError("Invalid InfluxDB configuration: " + ", ".join(config_issues))
     
     async def _initialize_client(self):
         """
@@ -50,17 +74,21 @@ class InfluxUploader:
         """
         if self._client is None:
             try:
+                self._validate_config()  # Revalidate before each attempt
+                
                 self._client = InfluxDBClientAsync(
                     url=settings.INFLUXDB_URL, 
                     token=settings.TOKEN, 
                     org=settings.ORG
                 )
                 # Create write API
-                self._write_api = self._client.write_api_async()
+                self._write_api = self._client.write_api()
                 logger.info("InfluxDB client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize InfluxDB client: {e}")
-                raise
+                # Do not re-raise to allow partial functionality
+                self._client = None
+                self._write_api = None
     
     async def upload_sensor_data(
         self, 
@@ -81,6 +109,10 @@ class InfluxUploader:
         # Ensure client is initialized
         if self._client is None:
             await self._initialize_client()
+        
+        # If initialization failed, silently return
+        if self._client is None:
+            return
         
         # Create point
         point = Point(measurement)
@@ -114,9 +146,14 @@ class InfluxUploader:
             return
         
         try:
-            # Ensure client is initialized
+            # Re-initialize client if needed
             if self._client is None:
                 await self._initialize_client()
+            
+            # If client is still None, skip sending
+            if self._client is None or self._write_api is None:
+                logger.warning("Cannot send batch - InfluxDB client not initialized")
+                return
             
             # Write points
             await self._write_api.write(
@@ -131,6 +168,8 @@ class InfluxUploader:
         
         except Exception as e:
             logger.error(f"Error uploading batch to InfluxDB: {e}")
+            # Clear batch to prevent repeated errors
+            self.batch_queue.clear()
     
     async def run(self):
         """
