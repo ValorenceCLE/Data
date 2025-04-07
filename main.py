@@ -4,6 +4,7 @@ Data collection manager for sensors and metrics.
 This module handles collecting data from various sensors and streams the data
 to the task manager for evaluation.
 """
+import os
 import asyncio
 import time
 from datetime import datetime, timezone
@@ -11,7 +12,6 @@ from typing import Dict, List, Any, Optional, Set
 import logging
 from app.utils.validator import Config, load_config
 from app.core.tasks import TaskManager
-from services.smbus import INA260Sensor, SHT30Sensor
 from app.data.collectors import DataCollectionManager
 
 
@@ -23,7 +23,7 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 # If the config file is in the same directory as main.py
-import os
+
 config_path = os.path.join(os.path.dirname(__file__), "config.json")
 config = load_config(config_path)
 

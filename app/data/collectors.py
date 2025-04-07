@@ -16,6 +16,7 @@ from app.data.network_collectors import NetworkDataCollector
 from app.data.influx_uploader import InfluxUploader
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
@@ -115,7 +116,7 @@ class DataCollectionManager:
                 # Create sensor
                 sensor = INA260Sensor(address=address)
                 self.ina260_sensors[relay_id] = sensor
-                logger.info(f"Initialized INA260 sensor for {relay_id}")
+                logger.debug(f"Initialized INA260 sensor for {relay_id}")
             except Exception as e:
                 logger.error(f"Failed to initialize INA260 sensor for {sensor_config['id']}: {e}")
         
@@ -123,7 +124,7 @@ class DataCollectionManager:
         try:
             self.sht30_sensor = SHT30Sensor(address=0x45)
             await self.sht30_sensor.reset()
-            logger.info("Initialized SHT30 environmental sensor")
+            logger.debug("Initialized SHT30 environmental sensor")
         except Exception as e:
             logger.error(f"Failed to initialize SHT30 sensor: {e}")
             self.sht30_sensor = None

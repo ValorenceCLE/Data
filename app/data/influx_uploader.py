@@ -13,6 +13,7 @@ from influxdb_client.client.write_api_async import WriteApiAsync
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class InfluxUploader:
     """
@@ -83,7 +84,7 @@ class InfluxUploader:
                 )
                 # Create write API
                 self._write_api = self._client.write_api()
-                logger.info("InfluxDB client initialized successfully")
+                logger.debug("InfluxDB client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize InfluxDB client: {e}")
                 # Do not re-raise to allow partial functionality
@@ -161,7 +162,7 @@ class InfluxUploader:
                 record=self.batch_queue
             )
             
-            logger.info(f"Successfully uploaded {len(self.batch_queue)} points")
+            logger.debug(f"Successfully uploaded {len(self.batch_queue)} points")
             
             # Clear the batch queue
             self.batch_queue.clear()
