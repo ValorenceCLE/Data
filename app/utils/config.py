@@ -49,8 +49,8 @@ class Settings:
 
         # Database settings - added default values and type checking
         self.TOKEN = os.getenv('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN', '')
-        self.ORG = os.getenv('DOCKER_INFLUXDB_INIT_ORG', 'valorence')
-        self.BUCKET = os.getenv('DOCKER_INFLUXDB_INIT_BUCKET', 'dpm_data')
+        self.ORG = os.getenv('DOCKER_INFLUXDB_INIT_ORG', 'RPi')
+        self.BUCKET = os.getenv('DOCKER_INFLUXDB_INIT_BUCKET', 'Raw_Data')
         
         # Improved InfluxDB URL handling
         influxdb_url = os.getenv('INFLUXDB_URL')
