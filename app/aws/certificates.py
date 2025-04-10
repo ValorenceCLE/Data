@@ -1,8 +1,11 @@
 import os
 import subprocess
 import pexpect
-from utils.logging_setup import local_logger as logger
+import logging
 from utils.config import settings
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class CertificateManager:
     def __init__(self):
