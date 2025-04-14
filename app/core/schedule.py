@@ -12,11 +12,22 @@ from app.utils.validator import RelayConfig, RelaySchedule
 
 
 logger = logging.getLogger("ScheduleManager")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+# Day bit values - using the provided values
+DAY_VALUES = {
+    "Sunday": 2,
+    "Monday": 4,
+    "Tuesday": 8,
+    "Wednesday": 16,
+    "Thursday": 32,
+    "Friday": 64,
+    "Saturday": 128
+}
 
 class ScheduleManager:
     """
@@ -57,16 +68,19 @@ class ScheduleManager:
         # Get current time and day
         now = datetime.now()
         current_time = now.strftime("%H:%M")
-        current_day_index = now.weekday() + 1  # Monday=1, Sunday=7
-        if current_day_index == 7:  # Convert Sunday from 7 to 0 for bit position
-            current_day_index = 0
+        
+        # Get current day name
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        current_day_name = day_names[now.weekday()]
+        
+        # Get day bit value for current day
+        current_day_bit = DAY_VALUES.get(current_day_name, 0)
         
         # Check if the schedule is active for the current day
-        day_bit = 1 << current_day_index
-        is_scheduled_today = (schedule.days_mask & day_bit) != 0
+        is_scheduled_today = (schedule.days_mask & current_day_bit) != 0
         
         if not is_scheduled_today:
-            logger.debug(f"Relay {relay_id} not scheduled for today (day bit {current_day_index})")
+            logger.debug(f"Relay {relay_id} not scheduled for today ({current_day_name})")
             return False
         
         # Check if current time is within the scheduled time range
@@ -93,17 +107,22 @@ class ScheduleManager:
             if not relay.enabled:
                 continue
             
+            # Skip if there's no schedule or it's disabled
+            if not isinstance(schedule, RelaySchedule) or not schedule.enabled:
+                continue
+            
             try:
                 should_be_on = self._should_be_on(relay_id, schedule)
                 
                 # Get the current state of the relay
                 current_state = await self.relay_manager.get_relay_state(relay_id)
-                is_on = current_state == 1 if current_state is not None else None
                 
                 # Skip if we couldn't determine the current state
-                if is_on is None:
+                if current_state is None:
                     logger.warning(f"Couldn't determine current state of relay {relay_id}")
                     continue
+                
+                is_on = current_state == 1
                 
                 # Check if we already know the last state we set
                 last_state = self._relay_states.get(relay_id)
@@ -113,15 +132,20 @@ class ScheduleManager:
                 # 2. We haven't already tried to set it to this state
                 if should_be_on != is_on and should_be_on != last_state:
                     if should_be_on:
-                        logger.info(f"Schedule: Turning relay {relay_id} ON")
+                        logger.info(f"Schedule: Turning relay {relay_id} ON (current state: {'ON' if is_on else 'OFF'})")
                         success = await self.relay_manager.set_relay_on(relay_id)
                     else:
-                        logger.info(f"Schedule: Turning relay {relay_id} OFF")
+                        logger.info(f"Schedule: Turning relay {relay_id} OFF (current state: {'ON' if is_on else 'OFF'})")
                         success = await self.relay_manager.set_relay_off(relay_id)
                     
                     # Remember the state we just tried to set
                     if success:
                         self._relay_states[relay_id] = should_be_on
+                        logger.info(f"Successfully set relay {relay_id} to {'ON' if should_be_on else 'OFF'}")
+                    else:
+                        logger.error(f"Failed to set relay {relay_id} to {'ON' if should_be_on else 'OFF'}")
+                else:
+                    logger.debug(f"Relay {relay_id} already in correct state: {'ON' if is_on else 'OFF'}")
             except Exception as e:
                 logger.error(f"Error checking schedule for relay {relay_id}: {e}")
     
@@ -143,6 +167,83 @@ class ScheduleManager:
                 logger.error(f"Error in schedule loop: {e}")
                 await asyncio.sleep(10)  # Wait a bit before retrying
     
+    async def verify_schedules(self) -> bool:
+        """
+        Verify that all relay schedules are correctly configured.
+        
+        Returns:
+            bool: True if all schedules are valid, False otherwise.
+        """
+        logger.info("Verifying relay schedules...")
+        
+        all_valid = True
+        for relay in self.relays:
+            if not relay.enabled:
+                logger.debug(f"Relay '{relay.id}' is disabled, skipping schedule verification")
+                continue
+                
+            schedule = relay.schedule
+            if not isinstance(schedule, RelaySchedule):
+                logger.debug(f"Relay '{relay.id}' has no schedule configuration")
+                continue
+                
+            if not schedule.enabled:
+                logger.debug(f"Schedule for relay '{relay.id}' is disabled")
+                continue
+                
+            try:
+                # Verify time formats
+                on_time_valid = True
+                off_time_valid = True
+                
+                if schedule.on_time:
+                    try:
+                        datetime.strptime(schedule.on_time, "%H:%M")
+                    except ValueError:
+                        on_time_valid = False
+                        logger.error(f"Relay '{relay.id}' has invalid on_time format: {schedule.on_time}")
+                        
+                if schedule.off_time:
+                    try:
+                        datetime.strptime(schedule.off_time, "%H:%M")
+                    except ValueError:
+                        off_time_valid = False
+                        logger.error(f"Relay '{relay.id}' has invalid off_time format: {schedule.off_time}")
+                        
+                # Verify days mask
+                days_mask_valid = 0 <= schedule.days_mask <= 255  # Updated max value to include all possible days
+                if not days_mask_valid:
+                    logger.error(f"Relay '{relay.id}' has invalid days_mask: {schedule.days_mask}")
+                    
+                schedule_valid = on_time_valid and off_time_valid and days_mask_valid
+                if schedule_valid:
+                    days = days_mask_to_names(schedule.days_mask)
+                    logger.info(f"Schedule for relay '{relay.id}' is valid - "
+                              f"On: {schedule.on_time}, Off: {schedule.off_time}, "
+                              f"Days: {', '.join(days)}")
+                    
+                    # Calculate next schedule change to verify logic
+                    next_change = next_schedule_change(schedule)
+                    if next_change:
+                        days_away = next_change.get("days_away", 0)
+                        change_time = next_change.get("time")
+                        state = "ON" if next_change.get("state") else "OFF"
+                        when = "today" if days_away == 0 else (
+                            "tomorrow" if days_away == 1 else f"in {days_away} days"
+                        )
+                        logger.info(f"Relay '{relay.id}' next scheduled change: {state} at "
+                                  f"{change_time.strftime('%H:%M')} {when}")
+                    else:
+                        logger.warning(f"No upcoming schedule changes for relay '{relay.id}'")
+                else:
+                    all_valid = False
+                    
+            except Exception as e:
+                logger.error(f"Error verifying schedule for relay '{relay.id}': {e}")
+                all_valid = False
+                
+        return all_valid
+    
     async def run(self):
         """
         Start the schedule manager.
@@ -154,9 +255,14 @@ class ScheduleManager:
         self._running = True
         logger.info("Schedule manager started")
         
+        # Verify schedules on startup
+        await self.verify_schedules()
+        
         try:
             # Run the main scheduling loop
             await self._schedule_loop()
+        except asyncio.CancelledError:
+            logger.info("Schedule manager cancelled")
         except Exception as e:
             logger.error(f"Error in schedule manager: {e}")
         finally:
@@ -180,16 +286,15 @@ def days_mask_to_names(days_mask: int) -> List[str]:
     Convert a days bitmask to a list of day names.
     
     Args:
-        days_mask (int): The days bitmask (bit 0 = Sunday, bit 1 = Monday, etc.)
+        days_mask (int): The days bitmask using the custom bit values.
         
     Returns:
         List[str]: List of day names.
     """
-    days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
     result = []
     
-    for i, day in enumerate(days):
-        if (days_mask & (1 << i)) != 0:
+    for day, bit_value in DAY_VALUES.items():
+        if (days_mask & bit_value) != 0:
             result.append(day)
             
     return result
@@ -204,23 +309,13 @@ def day_names_to_mask(day_names: List[str]) -> int:
         day_names (List[str]): List of day names.
         
     Returns:
-        int: The days bitmask (bit 0 = Sunday, bit 1 = Monday, etc.)
+        int: The days bitmask using the custom bit values.
     """
-    days_map = {
-        "sunday": 0,
-        "monday": 1,
-        "tuesday": 2,
-        "wednesday": 3,
-        "thursday": 4,
-        "friday": 5,
-        "saturday": 6
-    }
-    
     days_mask = 0
     for day in day_names:
-        day_lower = day.lower()
-        if day_lower in days_map:
-            days_mask |= (1 << days_map[day_lower])
+        day_title = day.title()  # Convert to title case for matching
+        if day_title in DAY_VALUES:
+            days_mask |= DAY_VALUES[day_title]
     
     return days_mask
 
@@ -241,9 +336,11 @@ def next_schedule_change(schedule: RelaySchedule) -> Optional[Dict[str, Any]]:
     
     now = datetime.now()
     current_time = now.strftime("%H:%M")
-    current_day_index = now.weekday() + 1  # Monday=1, Sunday=7
-    if current_day_index == 7:  # Convert Sunday from 7 to 0
-        current_day_index = 0
+    
+    # Get current day name
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    current_day_index = now.weekday()
+    current_day_name = day_names[current_day_index]
     
     on_time = schedule.on_time or "00:00"
     off_time = schedule.off_time or "23:59"
@@ -255,38 +352,31 @@ def next_schedule_change(schedule: RelaySchedule) -> Optional[Dict[str, Any]]:
     on_datetime = now.replace(hour=on_time_parts[0], minute=on_time_parts[1], second=0, microsecond=0)
     off_datetime = now.replace(hour=off_time_parts[0], minute=off_time_parts[1], second=0, microsecond=0)
     
+    # Check if today's schedule is active
+    current_day_bit = DAY_VALUES.get(current_day_name, 0)
+    is_scheduled_today = (schedule.days_mask & current_day_bit) != 0
+    
     # Handle schedules that span midnight
     if on_time > off_time:
-        # If current time is after off_time but before midnight, the next change is on_time tomorrow
-        if current_time < on_time and current_time >= off_time:
-            # Find the next day that has a schedule
-            days_checked = 0
-            next_day_index = current_day_index
-            while days_checked < 7:
-                next_day_index = (next_day_index + 1) % 7
-                if (schedule.days_mask & (1 << next_day_index)) != 0:
-                    # Found the next day with a schedule
-                    days_to_add = (next_day_index - current_day_index) % 7
-                    if days_to_add == 0:
-                        days_to_add = 7  # Next week
-                    
-                    next_change = on_datetime + timedelta(days=days_to_add)
-                    return {
-                        "time": next_change,
-                        "state": True,  # ON
-                        "days_away": days_to_add
-                    }
-                days_checked += 1
-                
-        # If current time is before off_time, the next change is off_time today
-        elif current_time < off_time:
+        # If it's currently after off_time but before on_time, and today is scheduled
+        if current_time < on_time and current_time >= off_time and is_scheduled_today:
+            return {
+                "time": on_datetime,
+                "state": True,  # ON
+                "days_away": 0
+            }
+        
+        # If it's before off_time and today is scheduled
+        if current_time < off_time and is_scheduled_today:
             return {
                 "time": off_datetime,
                 "state": False,  # OFF
                 "days_away": 0
             }
-        # If current time is after on_time, the next change is off_time tomorrow
-        elif current_time >= on_time:
+        
+        # If it's after on_time and today is scheduled
+        if current_time >= on_time and is_scheduled_today:
+            # The next change would be OFF time tomorrow
             return {
                 "time": off_datetime + timedelta(days=1),
                 "state": False,  # OFF
@@ -295,44 +385,37 @@ def next_schedule_change(schedule: RelaySchedule) -> Optional[Dict[str, Any]]:
     else:
         # Regular schedule (doesn't span midnight)
         
-        # If current time is before on_time, the next change is on_time today
-        if current_time < on_time:
-            # Check if today has a schedule
-            if (schedule.days_mask & (1 << current_day_index)) != 0:
-                return {
-                    "time": on_datetime,
-                    "state": True,  # ON
-                    "days_away": 0
-                }
-                
-        # If current time is before off_time but after on_time, the next change is off_time today
-        elif current_time < off_time and current_time >= on_time:
-            # Check if today has a schedule
-            if (schedule.days_mask & (1 << current_day_index)) != 0:
-                return {
-                    "time": off_datetime,
-                    "state": False,  # OFF
-                    "days_away": 0
-                }
+        # If it's before on_time and today is scheduled
+        if current_time < on_time and is_scheduled_today:
+            return {
+                "time": on_datetime,
+                "state": True,  # ON
+                "days_away": 0
+            }
+            
+        # If it's before off_time but after on_time and today is scheduled
+        if current_time < off_time and current_time >= on_time and is_scheduled_today:
+            return {
+                "time": off_datetime,
+                "state": False,  # OFF
+                "days_away": 0
+            }
     
     # If we reach here, we need to find the next scheduled day
-    days_checked = 0
-    next_day_index = current_day_index
-    while days_checked < 7:
-        next_day_index = (next_day_index + 1) % 7
-        if (schedule.days_mask & (1 << next_day_index)) != 0:
-            # Found the next day with a schedule
-            days_to_add = (next_day_index - current_day_index) % 7
-            if days_to_add == 0:
-                days_to_add = 7  # Next week
-            
-            next_change = on_datetime + timedelta(days=days_to_add)
+    for days_ahead in range(1, 8):  # Check up to 7 days ahead
+        next_day_index = (current_day_index + days_ahead) % 7
+        next_day_name = day_names[next_day_index]
+        next_day_bit = DAY_VALUES.get(next_day_name, 0)
+        
+        # Check if this day is scheduled
+        if (schedule.days_mask & next_day_bit) != 0:
+            # This day is scheduled, so the next change will be the ON time
+            next_on_datetime = on_datetime + timedelta(days=days_ahead)
             return {
-                "time": next_change,
+                "time": next_on_datetime,
                 "state": True,  # ON
-                "days_away": days_to_add
+                "days_away": days_ahead
             }
-        days_checked += 1
     
     # If no schedule found, return None
     return None

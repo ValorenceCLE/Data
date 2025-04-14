@@ -12,7 +12,7 @@ from app.utils.validator import Task, TaskAction
 from app.system.relay import RelayManager
 
 logger = logging.getLogger("TaskManager")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
@@ -180,13 +180,16 @@ class TaskManager:
         state = action.state.lower()
         
         if state == "on":
-            await self.relay_manager.set_relay_on(target)
+            result = await self.relay_manager.set_relay_on(target)
+            logger.info(f"IO action: turned relay {target} ON - Success: {result}")
         elif state == "off":
-            await self.relay_manager.set_relay_off(target)
+            result = await self.relay_manager.set_relay_off(target)
+            logger.info(f"IO action: turned relay {target} OFF - Success: {result}")
         elif state == "pulse":
             relay_config = self.relay_manager.get_relay_by_id(target)
             pulse_time = relay_config.pulse_time if relay_config else 5
-            await self.relay_manager.pulse_relay(target, pulse_time)
+            result = await self.relay_manager.pulse_relay(target, pulse_time)
+            logger.info(f"IO action: pulsed relay {target} for {pulse_time}s - Success: {result}")
         else:
             logger.error(f"Unknown IO state: {state}")
     
@@ -232,8 +235,8 @@ class TaskManager:
         """
         Start the task manager.
         
-        Note: This method doesn't do anything in this implementation since tasks
-        are evaluated when data is received via the evaluate_data method.
+        Note: This method doesn't do much - it just sleeps for a long time.
+        Tasks are evaluated when data is received via the evaluate_data method.
         """
         if self._running:
             logger.warning("Task manager already running")
@@ -244,8 +247,17 @@ class TaskManager:
         
         # This implementation doesn't have a main loop since tasks are evaluated on-demand
         # when data is received. We just need to keep the run() method alive.
-        while self._running:
-            await asyncio.sleep(3600)  # Sleep for a long time (1 hour)
+        try:
+            while self._running:
+                await asyncio.sleep(60)  # Sleep for a minute
+                logger.debug("Task manager running...")
+        except asyncio.CancelledError:
+            logger.info("Task manager cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in task manager: {e}")
+        finally:
+            self._running = False
     
     async def shutdown(self):
         """

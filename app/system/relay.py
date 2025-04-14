@@ -1,259 +1,173 @@
 """
-Relay Manager for controlling relay hardware.
+Relay Manager for controlling relay hardware via the local REST API.
 
-This module provides a unified interface for controlling relays, handling hardware
-interactions through the RelayControl class from services.controller.
+This module provides a unified interface for controlling relays, but no longer
+accesses the GPIO hardware directly. Instead, it sends HTTP requests to the REST API
+endpoints (which use our combined authentication dependency) so that only one part
+of the system is directly touching the hardware.
 """
 import asyncio
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import logging
+import aiohttp
 from app.utils.validator import RelayConfig
-from services.controller import RelayControl
-
+from app.utils.config import settings
+import os
 logger = logging.getLogger("RelayManager")
 logger.setLevel(logging.DEBUG)
 
 class RelayManager:
-    """
-    Manages all relays in the system, providing a unified interface for control.
-    """
     def __init__(self, relays: List[RelayConfig]):
         """
         Initialize the RelayManager.
-        
+
         Args:
             relays (List[RelayConfig]): List of relay configurations.
         """
         self.relays = relays
-        self.relay_controllers: Dict[str, RelayControl] = {}
+        
+        # Instead of using the container's IP, use the Docker host's network alias.
+        # Optionally allow overriding via an environment variable.
+        host_ip = os.getenv("HOST_IP", "host.docker.internal")
+        self.api_url = f"https://{host_ip}/api"
+        
+        self.internal_key = settings.SECRET_KEY
         self.initialized = False
-    
+        self.session = None
+
     async def init(self) -> bool:
         """
-        Initialize relay controllers based on configuration.
-        This method must be awaited before using other RelayManager methods.
+        Initialize the relay manager.
+
+        Since this implementation uses HTTP requests to an already-running REST API,
+        there is no actual hardware to initialize. This method exists only for
+        compatibility with the previous interface.
         
         Returns:
-            bool: True if initialization was successful, False otherwise.
+            bool: Always True.
         """
-        try:
-            # Create a controller for each relay in the configuration
-            for relay in self.relays:
-                relay_id = relay.id
-                
-                try:
-                    # Create the controller
-                    controller = RelayControl(relay_id)
-                    self.relay_controllers[relay_id] = controller
-                    
-                    # Set the initial state based on the 'enabled' setting
-                    if relay.enabled:
-                        await controller.turn_on()
-                    else:
-                        await controller.turn_off()
-                    
-                    logger.debug(f"Relay {relay_id} initialized to {'ON' if relay.enabled else 'OFF'}")
-                except Exception as e:
-                    logger.error(f"Error initializing relay {relay_id}: {e}")
-                    # Continue with other relays even if one fails
-            
-            self.initialized = True
-            logger.info(f"Initialized {len(self.relay_controllers)} relays")
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing relay controllers: {e}")
-            return False
-    
+        # Create a persistent session for all API requests
+        self.session = aiohttp.ClientSession()
+        self.initialized = True
+        logger.info("RelayManager initialized (using REST API)")
+        return True
+
+    def _get_headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "X-Internal-API-Key": self.internal_key
+        }
+
     async def set_relay_on(self, relay_id: str) -> bool:
         """
-        Turn a relay ON.
-        
-        Args:
-            relay_id (str): The identifier of the relay to turn ON.
-            
-        Returns:
-            bool: True if successful, False otherwise.
+        Turn a relay ON by posting to the REST API endpoint.
         """
-        if not self.initialized:
-            logger.error("RelayManager not initialized")
-            return False
-        
-        controller = self.relay_controllers.get(relay_id)
-        if not controller:
-            logger.error(f"Relay {relay_id} not found")
-            return False
-        
+        url = f"{self.api_url}/io/{relay_id}/state/on"
         try:
-            result = await controller.turn_on()
-            success = result.get("status") == "success"
-            if success:
-                logger.info(f"Relay {relay_id} turned ON")
-            else:
-                logger.error(f"Failed to turn relay {relay_id} ON: {result.get('message', 'Unknown error')}")
-            return success
+            async with self.session.post(url, headers=self._get_headers(), ssl=False) as response:
+                response.raise_for_status()
+                data = await response.json()
+                success = data.get("status") == "success"
+                if success:
+                    logger.info(f"Relay {relay_id} turned ON via API.")
+                else:
+                    logger.error(f"Failed to turn relay {relay_id} ON via API: {data.get('message', 'Unknown error')}")
+                return success
         except Exception as e:
-            logger.error(f"Error turning relay {relay_id} ON: {e}")
+            logger.exception(f"Error turning relay {relay_id} ON via API: {e}")
             return False
-    
+
     async def set_relay_off(self, relay_id: str) -> bool:
         """
-        Turn a relay OFF.
-        
-        Args:
-            relay_id (str): The identifier of the relay to turn OFF.
-            
-        Returns:
-            bool: True if successful, False otherwise.
+        Turn a relay OFF by posting to the REST API endpoint.
         """
-        if not self.initialized:
-            logger.error("RelayManager not initialized")
-            return False
-        
-        controller = self.relay_controllers.get(relay_id)
-        if not controller:
-            logger.error(f"Relay {relay_id} not found")
-            return False
-        
+        url = f"{self.api_url}/io/{relay_id}/state/off"
         try:
-            result = await controller.turn_off()
-            success = result.get("status") == "success"
-            if success:
-                logger.info(f"Relay {relay_id} turned OFF")
-            else:
-                logger.error(f"Failed to turn relay {relay_id} OFF: {result.get('message', 'Unknown error')}")
-            return success
+            async with self.session.post(url, headers=self._get_headers(), ssl=False) as response:
+                response.raise_for_status()
+                data = await response.json()
+                success = data.get("status") == "success"
+                if success:
+                    logger.info(f"Relay {relay_id} turned OFF via API.")
+                else:
+                    logger.error(f"Failed to turn relay {relay_id} OFF via API: {data.get('message', 'Unknown error')}")
+                return success
         except Exception as e:
-            logger.error(f"Error turning relay {relay_id} OFF: {e}")
+            logger.exception(f"Error turning relay {relay_id} OFF via API: {e}")
             return False
-    
+
     async def pulse_relay(self, relay_id: str, duration: float = None) -> bool:
         """
-        Pulse a relay (toggle its state briefly).
-        
-        Args:
-            relay_id (str): The identifier of the relay to pulse.
-            duration (float, optional): Duration in seconds to pulse for.
-                If None, uses the configured pulse_time from the relay config.
-                
-        Returns:
-            bool: True if successful, False otherwise.
+        Pulse the relay (toggle its state briefly) via the REST API.
+        If duration is not provided, uses the relay configuration's pulse_time.
         """
-        if not self.initialized:
-            logger.error("RelayManager not initialized")
-            return False
-        
-        controller = self.relay_controllers.get(relay_id)
-        if not controller:
-            logger.error(f"Relay {relay_id} not found")
-            return False
-        
-        # If no duration provided, get it from the configuration
         if duration is None:
             relay_config = next((r for r in self.relays if r.id == relay_id), None)
-            if relay_config:
-                duration = relay_config.pulse_time
-            else:
-                duration = 5  # Default pulse time
-        
+            duration = relay_config.pulse_time if relay_config else 5
+
+        url = f"{self.api_url}/io/{relay_id}/state/pulse"
         try:
-            # First toggle the relay
-            result = await controller.toggle()
-            if result.get("status") != "success":
-                logger.error(f"Failed to toggle relay {relay_id}: {result.get('message', 'Unknown error')}")
-                return False
-            
-            # Wait for the specified duration
-            logger.info(f"Relay {relay_id} pulsed for {duration} seconds")
-            await asyncio.sleep(duration)
-            
-            # Toggle it back
-            result = await controller.toggle()
-            success = result.get("status") == "success"
-            if not success:
-                logger.error(f"Failed to toggle relay {relay_id} back: {result.get('message', 'Unknown error')}")
-            return success
+            async with self.session.post(url, headers=self._get_headers(), ssl=False) as response:
+                response.raise_for_status()
+                data = await response.json()
+                success = data.get("status") == "success"
+                if success:
+                    logger.info(f"Relay {relay_id} pulsed via API for {duration} seconds.")
+                else:
+                    logger.error(f"Failed to pulse relay {relay_id} via API: {data.get('message', 'Unknown error')}")
+                return success
         except Exception as e:
-            logger.error(f"Error pulsing relay {relay_id}: {e}")
+            logger.exception(f"Error pulsing relay {relay_id} via API: {e}")
             return False
-    
+
     async def get_relay_state(self, relay_id: str) -> Optional[int]:
         """
-        Get the current state of a relay.
-        
-        Args:
-            relay_id (str): The identifier of the relay.
-            
-        Returns:
-            Optional[int]: 1 if ON, 0 if OFF, None if error or not found.
+        Get the current state of a relay via the REST API.
         """
-        if not self.initialized:
-            logger.error("RelayManager not initialized")
-            return None
-        
-        controller = self.relay_controllers.get(relay_id)
-        if not controller:
-            logger.error(f"Relay {relay_id} not found")
-            return None
-        
+        url = f"{self.api_url}/io/relays/state"
         try:
-            state = controller.state
-            return state
+            async with self.session.get(url, headers=self._get_headers(), ssl=False) as response:
+                response.raise_for_status()
+                states = await response.json()  # Should be a dict mapping relay IDs to states
+                return states.get(relay_id)
         except Exception as e:
-            logger.error(f"Error getting state for relay {relay_id}: {e}")
+            logger.exception(f"Error retrieving state for relay {relay_id}: {e}")
             return None
-    
+
     async def get_all_relay_states(self) -> Dict[str, int]:
         """
-        Get the current states of all relays.
-        
-        Returns:
-            Dict[str, int]: Dictionary mapping relay IDs to states (1=ON, 0=OFF, -1=error).
+        Retrieve the current states of all relays via the REST API.
         """
-        if not self.initialized:
-            logger.error("RelayManager not initialized")
+        url = f"{self.api_url}/io/relays/state"
+        try:
+            async with self.session.get(url, headers=self._get_headers(), ssl=False) as response:
+                response.raise_for_status()
+                states = await response.json()
+                return states
+        except Exception as e:
+            logger.exception(f"Error retrieving all relay states: {e}")
             return {}
-        
-        states = {}
-        for relay_id, controller in self.relay_controllers.items():
-            try:
-                states[relay_id] = controller.state
-            except Exception as e:
-                logger.error(f"Error getting state for relay {relay_id}: {e}")
-                states[relay_id] = -1  # Error state
-        
-        return states
-    
+
     def get_relay_by_id(self, relay_id: str) -> Optional[RelayConfig]:
         """
         Get a relay configuration by its ID.
-        
-        Args:
-            relay_id (str): The relay identifier.
-            
-        Returns:
-            Optional[RelayConfig]: The relay configuration or None if not found.
         """
         for relay in self.relays:
             if relay.id == relay_id:
                 return relay
         return None
-    
+
     def get_relay_names(self) -> Dict[str, str]:
         """
-        Get a mapping of relay IDs to names.
-        
-        Returns:
-            Dict[str, str]: Dictionary mapping relay IDs to names.
+        Get a mapping of relay IDs to relay names.
         """
         return {relay.id: relay.name for relay in self.relays}
-    
+
     async def shutdown(self):
         """
-        Perform a clean shutdown of all relays.
+        Perform any shutdown tasks if necessary.
         """
-        if not self.initialized:
-            return
-        
         logger.info("Shutting down relay manager")
-        # No specific cleanup needed for RelayControl instances
-        self.initialized = False
+        # Close the aiohttp session when shutting down
+        if self.session and not self.session.closed:
+            await self.session.close()

@@ -13,12 +13,26 @@ import ipaddress
 import logging
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ConfigValidator")
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+# Day bit values for schedule configuration
+DAY_VALUES = {
+    "Sunday": 2,
+    "Monday": 4,
+    "Tuesday": 8,
+    "Wednesday": 16,
+    "Thursday": 32,
+    "Friday": 64,
+    "Saturday": 128
+}
+# Max value for days_mask (all days combined)
+MAX_DAYS_MASK = sum(DAY_VALUES.values())
+
 class NetworkConfig(BaseModel):
     """
     Network configuration model.
@@ -71,7 +85,7 @@ class RelaySchedule(BaseModel):
     enabled: bool = False
     on_time: Optional[str] = None
     off_time: Optional[str] = None
-    days_mask: int = 0  # Bitmask for days: bit 0 = Sunday, bit 1 = Monday, etc.
+    days_mask: int = 0  # Bitmask for days using custom bit values
 
     @field_validator('on_time', 'off_time')
     def validate_time(cls, v, info):
@@ -87,8 +101,8 @@ class RelaySchedule(BaseModel):
 
     @field_validator('days_mask')
     def validate_days_mask(cls, v):
-        if not 0 <= v <= 255:  # 8 bits for 7 days plus unused bit
-            raise ValueError(f"days_mask must be between 0 and 255, got {v}")
+        if not 0 <= v <= MAX_DAYS_MASK:  # Updated max value for custom bit values
+            raise ValueError(f"days_mask must be between 0 and {MAX_DAYS_MASK}, got {v}")
         return v
 
 class ButtonConfig(BaseModel):
@@ -298,16 +312,15 @@ def days_mask_to_names(days_mask: int) -> List[str]:
     Convert a days bitmask to a list of day names.
     
     Args:
-        days_mask (int): The days bitmask (bit 0 = Sunday, bit 1 = Monday, etc.)
+        days_mask (int): The days bitmask using the custom bit values.
         
     Returns:
         List[str]: List of day names.
     """
-    days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
     result = []
     
-    for i, day in enumerate(days):
-        if (days_mask & (1 << i)) != 0:
+    for day, bit_value in DAY_VALUES.items():
+        if (days_mask & bit_value) != 0:
             result.append(day)
             
     return result
@@ -320,22 +333,12 @@ def day_names_to_mask(day_names: List[str]) -> int:
         day_names (List[str]): List of day names.
         
     Returns:
-        int: The days bitmask (bit 0 = Sunday, bit 1 = Monday, etc.)
+        int: The days bitmask using the custom bit values.
     """
-    days_map = {
-        "sunday": 0,
-        "monday": 1,
-        "tuesday": 2,
-        "wednesday": 3,
-        "thursday": 4,
-        "friday": 5,
-        "saturday": 6
-    }
-    
     days_mask = 0
     for day in day_names:
-        day_lower = day.lower()
-        if day_lower in days_map:
-            days_mask |= (1 << days_map[day_lower])
+        day_title = day.title()  # Convert to title case for matching
+        if day_title in DAY_VALUES:
+            days_mask |= DAY_VALUES[day_title]
     
     return days_mask

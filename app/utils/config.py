@@ -124,4 +124,5 @@ class Settings:
         # Data collection settings
         self.COLLECTION_INTERVAL = 30
         self.NULL = -9999  # Value to use for missing data, may need to be adjusted based on data type
+        self.SECRET_KEY = os.getenv('SECRET_KEY')
 settings = Settings()
